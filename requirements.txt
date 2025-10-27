@@ -1,0 +1,5 @@
+crccheck
+bitstruct
+pyyaml
+nicegui
+plotly

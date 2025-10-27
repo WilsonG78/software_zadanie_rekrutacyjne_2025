@@ -2,20 +2,24 @@ from typing import Callable, List, Optional
 from collections import deque
 import os
 
-from communication_library.exceptions import (MissingHeaderError,
-                                                                 UnregisteredCallbackError)
+from communication_library.exceptions import (
+    MissingHeaderError,
+    UnregisteredCallbackError,
+)
 
 from communication_library.exceptions import TransportError  # pylint: disable=ungrouped-imports
-from communication_library.tcp_transport import TcpTransport # pylint: disable=ungrouped-imports
-from communication_library.frame import Frame # pylint: disable=ungrouped-imports
-from communication_library.protocol import GroundStationProtocol # pylint: disable=ungrouped-imports
+from communication_library.tcp_transport import TcpTransport  # pylint: disable=ungrouped-imports
+from communication_library.frame import Frame  # pylint: disable=ungrouped-imports
+from communication_library.protocol import GroundStationProtocol  # pylint: disable=ungrouped-imports
 
 from communication_library.ids import HEADER_ID, BoardID
 from communication_library.ids import PriorityID
-from communication_library.transport import (TransportSettings,
-                                                                TransportOptions,
-                                                                TransportInfo,
-                                                                TransportType)
+from communication_library.transport import (
+    TransportSettings,
+    TransportOptions,
+    TransportInfo,
+    TransportType,
+)
 
 
 class CommunicationManager:
@@ -43,9 +47,10 @@ class CommunicationManager:
         if transport_type == TransportType.TCP:
             self._transport = TcpTransport()
 
-
         else:
-            raise TransportError(f'Attempted to use non existent transport: {transport_type}')
+            raise TransportError(
+                f"Attempted to use non existent transport: {transport_type}"
+            )
 
     @property
     def transport_options(self) -> TransportOptions:
@@ -61,8 +66,12 @@ class CommunicationManager:
 
         return self._transport.is_open
 
-    def connect(self, transport_options: TransportSettings, timeout: int = 0,
-                write_timeout: Optional[int] = 1) -> None:
+    def connect(
+        self,
+        transport_options: TransportSettings,
+        timeout: int = 0,
+        write_timeout: Optional[int] = 1,
+    ) -> None:
         """
         Opens the communication transport.
         :param transport_options: used to establish underlying transport connection
@@ -91,7 +100,7 @@ class CommunicationManager:
                 assert key not in self._callbacks
                 self._callbacks[key] = callback
         else:
-            #frame = frame.as_reversed_frame()
+            # frame = frame.as_reversed_frame()
             assert frame not in self._callbacks
             self._callbacks[frame] = callback
 
@@ -134,7 +143,7 @@ class CommunicationManager:
         """
         header = self._transport.read(1)
         if header != bytes([HEADER_ID]):
-            raise MissingHeaderError(f'Received byte is not a header: {header}')
+            raise MissingHeaderError(f"Received byte is not a header: {header}")
 
         raw_frame = self._transport.read(13)
         frame = self._protocol.decode(header + raw_frame)
@@ -159,12 +168,12 @@ class CommunicationManager:
     def create_broadcast_callback_keys(self, frame) -> List[Frame]:
         frame_kwargs = frame.as_reversed_frame().as_dict()
         callback_keys = []
-        assert frame_kwargs['source'] == BoardID.BROADCAST
+        assert frame_kwargs["source"] == BoardID.BROADCAST
         for source in BoardID:
             if source == BoardID.LAST_BOARD:
                 break
             if source not in (BoardID.BROADCAST, BoardID.GRAZYNA):
-                frame_kwargs['source'] = source
+                frame_kwargs["source"] = source
                 callback_keys.append(Frame(**frame_kwargs))
         return callback_keys
 
