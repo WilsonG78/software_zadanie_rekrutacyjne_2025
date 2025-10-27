@@ -23,11 +23,12 @@ class MissionContext:
     _state: "MissionState"
     communication_manager: CommunicationManager
     action_handler: Dict[ids.ActionID, Callable]
-    servos: Dict[str, int]
-    servo_to_id: Dict[str, int]
-    relays: Dict[str, float]
-    relays_to_id: Dict[str, int]
-    sensors: Dict[str, int]
+    servos: Dict[int, Dict[str, any]]
+    servo_id_to_name: Dict[int, str]
+    relays: Dict[int, Dict[str, any]]
+    relay_id_to_name: Dict[int, str]
+    sensors: Dict[int, Dict[str, any]]
+    sensor_id_to_name: Dict[int, str]
 
     def __init__(self, hardware_config: str):
         # Setup logging
@@ -72,28 +73,41 @@ class MissionContext:
             self.config = yaml.safe_load(config_file)
         self.logger.info(f"Hardware configuration loaded from {hardware_config}")
 
+        # Servos: {device_id: {"name": servo_name, "position": closed_pos}}
         self.servos = {}
-        self.servo_to_id = {}
+        self.servo_id_to_name = {}
         for servo_name, servo_config in self.config["devices"]["servo"].items():
-            self.servos[servo_name] = servo_config["closed_pos"]
-            self.servo_to_id[servo_name] = servo_config["device_id"]
-        self.logger.info(f"Servos configured: {list(self.servos.keys())}")
+            device_id = servo_config["device_id"]
+            self.servos[device_id] = {
+                "name": servo_name,
+                "position": servo_config["closed_pos"]
+            }
+            self.servo_id_to_name[device_id] = servo_name
+        self.logger.info(f"Servos configured: {list(self.servo_id_to_name.values())}")
 
+        # Relays: {device_id: {"name": relay_name, "position": 0}}
         self.relays = {}
-        self.relays_to_id = {}
+        self.relay_id_to_name = {}
         for relay_name, relay_config in self.config["devices"]["relay"].items():
-            self.relays[relay_name] = 0
-            self.relays_to_id[relay_name] = relay_config["device_id"]
-        self.logger.info(f"Relays configured: {list(self.relays.keys())}")
+            device_id = relay_config["device_id"]
+            self.relays[device_id] = {
+                "name": relay_name,
+                "position": 0
+            }
+            self.relay_id_to_name[device_id] = relay_name
+        self.logger.info(f"Relays configured: {list(self.relay_id_to_name.values())}")
 
-        self.sensors = {
-            "fuel_level": 0.0,
-            "oxidizer_level": 0.0,
-            "altitude": 0.0,
-            "oxidizer_pressure": 0.0,
-            "angle": 2.0,
-        }
-        self.logger.info(f"Sensors initialized: {list(self.sensors.keys())}")
+        # Sensors: {device_id: {"name": sensor_name, "value": sensor_value}}
+        self.sensors = {}
+        self.sensor_id_to_name = {}
+        for sensor_name, sensor_config in self.config["devices"]["sensor"].items():
+            device_id = sensor_config["device_id"]
+            self.sensors[device_id] = {
+                "name": sensor_name,
+                "value": 0.0
+            }
+            self.sensor_id_to_name[device_id] = sensor_name
+        self.logger.info(f"Sensors configured: {list(self.sensor_id_to_name.values())}")
         
         self.logger.info("=== MissionContext Initialization Completed ===")
         print(self._state)
@@ -120,15 +134,13 @@ class MissionContext:
         except TimeoutError as e:
             self.logger.debug(f"Frame receive timeout: {e}")
         except UnregisteredCallbackError as e:
-            self.logger.warning(f"Unregistered callback error: {e}")
             handler = self.action_handler.get(e.frame.action)
             if handler:
-                self.logger.info(f"Handling frame with registered handler: {e.frame}")
                 handler(e.frame)
             else:
                 self.logger.error(f"No handler found for frame: {e.frame}")
         except Exception as e:
-            self.logger.error(f"Unexpected error in handle_frame: {e}")
+           pass
 
     def update_telemetry(self, frame: Frame):
         self.logger.debug("Updating telemetry from frame")
@@ -158,16 +170,56 @@ class MissionContext:
         return frame
 
     def servo_name_to_id(self, name: str):
-        return self.servo_to_id[name]
+        """Get device ID from servo name"""
+        for device_id, servo_info in self.servos.items():
+            if servo_info["name"] == name:
+                return device_id
+        raise KeyError(f"Servo name '{name}' not found")
+    
+    def relay_name_to_id(self, name: str):
+        """Get device ID from relay name"""
+        for device_id, relay_info in self.relays.items():
+            if relay_info["name"] == name:
+                return device_id
+        raise KeyError(f"Relay name '{name}' not found")
+    
+    def get_servo_name(self, device_id: int):
+        """Get servo name from device ID"""
+        return self.servo_id_to_name.get(device_id, f"Unknown_servo_{device_id}")
+    
+    def get_relay_name(self, device_id: int):
+        """Get relay name from device ID"""
+        return self.relay_id_to_name.get(device_id, f"Unknown_relay_{device_id}")
+    
+    def sensor_name_to_id(self, name: str):
+        """Get device ID from sensor name"""
+        for device_id, sensor_info in self.sensors.items():
+            if sensor_info["name"] == name:
+                return device_id
+        raise KeyError(f"Sensor name '{name}' not found")
+    
+    def get_sensor_name(self, device_id: int):
+        """Get sensor name from device ID"""
+        return self.sensor_id_to_name.get(device_id, f"Unknown_sensor_{device_id}")
+    
+    def get_sensor_value(self, device_id: int):
+        """Get sensor value by device ID"""
+        return self.sensors.get(device_id, {}).get("value", 0.0)
+    
+    def get_sensor_value_by_name(self, name: str):
+        """Get sensor value by name"""
+        device_id = self.sensor_name_to_id(name)
+        return self.get_sensor_value(device_id)
 
     def send_frame(self, frame: Frame) -> None:
-        self.logger.info(f"Sending frame: {frame.action} to device {frame.device_type} (ID: {frame.device_id})")
+        self.logger.info(f"Sending frame: {frame.action} to device {frame.device_type} (ID: {frame.device_id}) frame {frame}")
         self.communication_manager.push(frame)
         self.communication_manager.send()
         self.logger.debug("Frame sent successfully")
 
     def close_relay(self, relay_id: int):
-        self.logger.info(f"Closing relay ID: {relay_id}")
+        relay_name = self.get_relay_name(relay_id)
+        self.logger.info(f"Closing relay ID: {relay_id} ({relay_name})")
         relay_close_frame = Frame(
             ids.BoardID.ROCKET,
             ids.PriorityID.LOW,
@@ -180,9 +232,13 @@ class MissionContext:
             (),
         )
         self.send_frame(relay_close_frame)
+        # Update position in our data structure
+        if relay_id in self.relays:
+            self.relays[relay_id]["position"] = ids.OperationID.RELAY.value.CLOSE
 
     def close_servo(self, servo_id: int):
-        self.logger.info(f"Closing servo ID: {servo_id}")
+        servo_name = self.get_servo_name(servo_id)
+        self.logger.info(f"Closing servo ID: {servo_id} ({servo_name})")
         servo_close_frame = Frame(
             ids.BoardID.ROCKET,
             ids.PriorityID.LOW,
@@ -195,6 +251,9 @@ class MissionContext:
             (),
         )
         self.send_frame(servo_close_frame)
+        # Update position in our data structure
+        if servo_id in self.servos:
+            self.servos[servo_id]["position"] = ids.OperationID.SERVO.value.CLOSE
 
     def run(self):
         """Main mission loop"""
@@ -224,22 +283,27 @@ class MissionState(ABC):
 
     @abstractmethod
     def handle_feed(self, frame: Frame):
-        device_name = ids.DeviceID(frame.device_type).name
-        if self.context and hasattr(self.context, 'logger'):
-            self.context.logger.debug(f"Processing FEED data for {device_name}: {frame.payload}")
+        device_id = frame.device_id
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
-                if self.context and hasattr(self.context, 'logger'):
-                    self.context.logger.debug(f"Sensor {device_name} updated to: {frame.payload[0]}")
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
+                    sensor_name = self.context.get_sensor_name(device_id)
+                    self.context.logger.debug(f"Sensor {sensor_name} (ID: {device_id}) updated to: {frame.payload[0]}")
+                
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
-                if self.context and hasattr(self.context, 'logger'):
-                    self.context.logger.debug(f"Servo {device_name} updated to: {frame.payload[0]}")
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
+                    servo_name = self.context.get_servo_name(device_id)
+                    self.context.logger.debug(f"Servo {servo_name} (ID: {device_id}) updated to: {frame.payload[0]}")
+                
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
-                if self.context and hasattr(self.context, 'logger'):
-                    self.context.logger.debug(f"Relay {device_name} updated to: {frame.payload[0]}")
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
+                    relay_name = self.context.get_relay_name(device_id)
+                    self.context.logger.debug(f"Relay {relay_name} (ID: {device_id}) updated to: {frame.payload[0]}")
+                
 
     @abstractmethod
     def handle_nack(self, frame: Frame):
@@ -263,27 +327,36 @@ class IdleState(MissionState):
         self.context.logger.info("=== IdleState Entered ===")
         self.context.logger.info("Closing all open relays and servos")
         
-        for relay in self.context.relays.keys():
-            if self.context.relays[relay] == ids.OperationID.RELAY.value.OPEN:
-                self.context.logger.info(f"Closing open relay: {relay}")
-                self.context.close_relay(self.context.relays_to_id[relay])
+        # Close all open relays
+        for relay_id, relay_info in self.context.relays.items():
+            if relay_info["position"] == ids.OperationID.RELAY.value.OPEN:
+                self.context.logger.info(f"Closing open relay: {relay_info['name']} (ID: {relay_id})")
+                self.context.close_relay(relay_id)
         
-        for servo in self.context.servos.keys():
-            if self.context.servos[servo] == ids.OperationID.SERVO.value.OPEN:
-                self.context.logger.info(f"Closing open servo: {servo}")
-                self.context.close_servo(self.context.servo_to_id[servo])
+        # Close all open servos
+        for servo_id, servo_info in self.context.servos.items():
+            if servo_info["position"] == ids.OperationID.SERVO.value.OPEN:
+                self.context.logger.info(f"Closing open servo: {servo_info['name']} (ID: {servo_id})")
+                self.context.close_servo(servo_id)
         
         self.context.logger.info("IdleState initialization completed")
 
+        
+
     def handle_feed(self, frame: Frame):
-        device_name = ids.DeviceID(frame.device_type).name
+        device_id = frame.device_id
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
+        self.transition_condition()
 
     def handle_nack(self, frame: Frame):
         self.context.send_frame(frame)
@@ -296,16 +369,24 @@ class IdleState(MissionState):
 
     def transition_condition(self):
         is_good = True
-        for relay in self.context.relays.keys():
-            if self.context.relays[relay] != ids.OperationID.RELAY.value.CLOSE:
-                self.context.close_relay(self.context.relays_to_id[relay])
+        
+        # Check all relays are closed
+        for relay_id, relay_info in self.context.relays.items():
+            if relay_info["position"] != ids.OperationID.RELAY.value.CLOSE:
+                self.context.logger.info(f"Closing relay {relay_info['name']} (ID: {relay_id})")
+                self.context.close_relay(relay_id)
                 is_good = False
-        for servo in self.context.servos.keys():
-            if self.context.servos[servo] != ids.OperationID.SERVO.value.CLOSE:
-                self.context.close_servo(self.context.servo_to_id[servo])
+        
+        # Check all servos are closed
+        for servo_id, servo_info in self.context.servos.items():
+            if servo_info["position"] != ids.OperationID.SERVO.value.CLOSE:
+                self.context.logger.info(f"Closing servo {servo_info['name']} (ID: {servo_id})")
+                self.context.close_servo(servo_id)
                 is_good = False
+        
         if is_good:
-            self.context.transition_to(LaunchState)
+            self.context.logger.info("All devices closed, transitioning to LaunchState")
+            self.context.transition_to(LaunchState())
 
 
 class LaunchState(MissionState):
@@ -362,23 +443,32 @@ class LaunchState(MissionState):
         self.context.send_frame(new_frame)
 
     def handle_ack(self, frame):
-        print(f"Action completed {frame}")
+        if frame.device_type == ids.DeviceID.SERVO and frame.device_id == 1:
+            self.context.transition_to(FuelState())
 
     def handle_feed(self, frame):
-        device_name = ids.DeviceID(frame.device_type).name
+        device_id = frame.device_id
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
-        oxidizer_level = self.context.sensors["oxidizer_level"]
-        oxidizer_pressure = self.context.sensors["oxidizer_pressure"]
-        if device_name == "oxidizer_level":
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
+        
+        # Get sensor values using the new structure
+        oxidizer_level = self.context.get_sensor_value_by_name("oxidizer_level")
+        oxidizer_pressure = self.context.get_sensor_value_by_name("oxidizer_pressure")
+        
+        sensor_name = self.context.get_sensor_name(device_id) if device_id in self.context.sensors else None
+        if sensor_name == "oxidizer_level":
             if oxidizer_level >= self.target_level and self.oxidizer_fueling:
                 self.close_oxidizer_intake()
-        elif device_name == "oxidizer_pressure":
+        elif sensor_name == "oxidizer_pressure":
             if (
                 self.fueling_complete
                 and abs(oxidizer_pressure - self.target_pressure) < 5
@@ -434,21 +524,30 @@ class FuelState(MissionState):
             and frame.operation == ids.OperationID.SERVO.value.POSITION
             and frame.payload[0] == 100  # closed position
         ):
-            self.context.transition_to(HeatingOxidizerState)
+            self.context.transition_to(HeatingOxidizerState())
 
     def handle_feed(self, frame):
-        device_name = ids.DeviceID(frame.device_type).name
+        device_id = frame.device_id
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
-        fuel_level = self.context.sensors["fuel_level"]
-        if device_name == "fuel_intake":
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
+        
+        fuel_level = self.context.get_sensor_value_by_name("fuel_level")
+        servo_name = self.context.get_servo_name(device_id) if device_id in self.context.servos else None
+        if servo_name == "fuel_intake":
             if fuel_level >= self.target_fuel_level and self.fueling:
                 self.close_fuel_intake()
+    def handle_service(self, frame: Frame):
+        pass
+
 
     def close_fuel_intake(self):
         close_fuel_intake = Frame(
@@ -488,16 +587,22 @@ class HeatingOxidizerState(MissionState):
         self.context.send_frame(turn_on_oxidizer_heater)
 
     def handle_feed(self, frame):
-        device_name = ids.DeviceID(frame.device_type).name
+        device_id = frame.device_id
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
-        oxidizer_pressure = self.context.sensors["oxidizer_pressure"]
-        if device_name == "oxidizer_pressure":
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
+        
+        oxidizer_pressure = self.context.get_sensor_value_by_name("oxidizer_pressure")
+        sensor_name = self.context.get_sensor_name(device_id) if device_id in self.context.sensors else None
+        if sensor_name == "oxidizer_pressure":
             if oxidizer_pressure >= self.target_level and self.heating:
                 self.turn_off_heater()
 
@@ -545,6 +650,8 @@ class HeatingOxidizerState(MissionState):
         ):
             self.heating = True
 
+    def handle_service(self, frame: Frame):
+        pass
 
 class IgnitationState(MissionState):
     def on_enter(self):
@@ -648,21 +755,22 @@ class IgnitationState(MissionState):
             print("[IgnitionState] Igniter fired successfully, awaiting lift-off...")
 
     def handle_feed(self, frame: Frame):
-        device_name = ids.DeviceID(frame.device_type).name
+        device_id = frame.device_id
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
-        
-        
-       
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
         
         # Check for successful ignition (altitude increasing)
         if self.igniter_on and not self.ignition_successful:
-            altitude = self.context.sensors.get("altitude", 0)
+            altitude = self.context.get_sensor_value_by_name("altitude")
             if altitude > 0:
                 self.ignition_successful = True
                 
@@ -688,7 +796,7 @@ class IgnitationState(MissionState):
     def handle_ack(self, frame: Frame):
         """Handle ACK responses during ignition"""
         now = time.time()
-        device_name = ids.DeviceID(frame.device_type).name
+        device_name = ids.DeviceID(frame.device_type)
         if frame.device_type == ids.DeviceID.SERVO:
             if frame.device_id == 2:  # fuel_main
                 self.fuel_ack_time = now
@@ -714,18 +822,26 @@ class FlightState(MissionState):
         pass
 
     def handle_feed(self, frame: Frame):
-        device_name = ids.DeviceID(frame.device_type).name
-        if device_name == "altitude":
-            if frame.payload[0] < self.context.sensors["altitude"]:
-                self.context.sensors["altitude"] = frame.payload[0]
-                self.context.transition_to(LandingState())
+        device_id = frame.device_id
+        
+        if device_id in self.context.sensors:
+            sensor_name = self.context.get_sensor_name(device_id)
+            if sensor_name == "altitude":
+                current_altitude = self.context.get_sensor_value_by_name("altitude")
+                if frame.payload[0] < current_altitude:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
+                    self.context.transition_to(LandingState())
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
     def handle_nack(self, frame: Frame):
         pass
     def handle_ack(self, frame: Frame):
@@ -755,15 +871,21 @@ class LandingState(MissionState):
     
 
     def handle_feed(self, frame: Frame):
-        device_name = ids.DeviceID(frame.device_type).name
+        device_id = frame.device_id
+        
         match frame.device_type:
             case ids.DeviceID.SENSOR:
-                self.context.sensors[device_name] = frame.payload[0]
+                if device_id in self.context.sensors:
+                    self.context.sensors[device_id]["value"] = frame.payload[0]
             case ids.DeviceID.SERVO:
-                self.context.servos[device_name] = frame.payload[0]
+                if device_id in self.context.servos:
+                    self.context.servos[device_id]["position"] = frame.payload[0]
             case ids.DeviceID.RELAY:
-                self.context.relays[device_name] = frame.payload[0]
-        if self.context.sensors["altitude"] <= 0:
+                if device_id in self.context.relays:
+                    self.context.relays[device_id]["position"] = frame.payload[0]
+        
+        altitude = self.context.get_sensor_value_by_name("altitude")
+        if altitude <= 0:
             self.landing_complete = True
             self.context.transition_to(LandedState())
 
